@@ -3,7 +3,6 @@ using BetterGenshinImpact.Core.Recognition.OCR;
 using BetterGenshinImpact.Core.Recognition.ONNX;
 using BetterGenshinImpact.Core.Simulator;
 using BetterGenshinImpact.Core.Simulator.Extensions;
-using BetterGenshinImpact.GameTask.AutoFight;
 using BetterGenshinImpact.GameTask.AutoFight.Assets;
 using BetterGenshinImpact.GameTask.AutoFight.Model;
 using BetterGenshinImpact.GameTask.AutoFight.Script;
@@ -14,7 +13,6 @@ using BetterGenshinImpact.GameTask.Model.Area;
 using BetterGenshinImpact.Helpers;
 using BetterGenshinImpact.Service.Notification;
 using BetterGenshinImpact.View.Drawable;
-using Compunet.YoloV8;
 using Microsoft.Extensions.Logging;
 using OpenCvSharp;
 using System;
@@ -31,30 +29,33 @@ using BetterGenshinImpact.GameTask.Common.BgiVision;
 using BetterGenshinImpact.GameTask.Common.Element.Assets;
 using BetterGenshinImpact.GameTask.Common.Job;
 using BetterGenshinImpact.Service.Notification.Model.Enum;
-using Vanara.PInvoke;
 using static BetterGenshinImpact.GameTask.Common.TaskControl;
-using static Vanara.PInvoke.Kernel32;
-using static Vanara.PInvoke.User32;
 using Microsoft.Extensions.Localization;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using BetterGenshinImpact.GameTask.AutoArtifactSalvage;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using BetterGenshinImpact.Core.Script.Dependence;
+using Compunet.YoloSharp;
 
 namespace BetterGenshinImpact.GameTask.AutoDomain;
 
 public class AutoDomainTask : ISoloTask
 {
     public string Name => "自动秘境";
-
+    
     private readonly AutoDomainParam _taskParam;
 
-    private readonly YoloV8Predictor _predictor;
+    private readonly BgiYoloPredictor _predictor;
 
     private readonly AutoDomainConfig _config;
 
     private readonly CombatScriptBag _combatScriptBag;
 
     private CancellationToken _ct;
+    
+    private ObservableCollection<OneDragonFlowConfig> ConfigList = [];
 
     private readonly string challengeCompletedLocalizedString;
     private readonly string autoLeavingLocalizedString;
@@ -66,10 +67,7 @@ public class AutoDomainTask : ISoloTask
     {
         AutoFightAssets.DestroyInstance();
         _taskParam = taskParam;
-        _predictor = YoloV8Builder.CreateDefaultBuilder()
-            .UseOnnxModel(Global.Absolute(@"Assets\Model\Domain\bgi_tree.onnx"))
-            .WithSessionOptions(BgiSessionOption.Instance.Options)
-            .Build();
+        _predictor = BgiOnnxFactory.Instance.CreateYoloPredictor(BgiOnnxModel.BgiTree);
 
         _config = TaskContext.Instance().Config.AutoDomainConfig;
 
@@ -337,7 +335,72 @@ public class AutoDomainTask : ISoloTask
                 await Delay(800, _ct);
             }
         }
+        
+        DateTime now = DateTime.Now;        
+        if (now.DayOfWeek == DayOfWeek.Sunday && now.Hour >= 4 || now.DayOfWeek == DayOfWeek.Monday && now.Hour < 4)
+        {
+            using var artifactArea = CaptureToRectArea().Find(fightAssets.ArtifactAreaRa);//检测是否为圣遗物副本
+            if (artifactArea.IsEmpty())
+            {
+                
+                if (int.TryParse(_taskParam.SundaySelectedValue, out int sundaySelectedValue))
+                {
+                    if (sundaySelectedValue > 0)
+                    {
+                        Logger.LogInformation("周日设置了秘境奖励序号 {sundaySelectedValue}", sundaySelectedValue);
+                        using var abnormalscreenRa = CaptureToRectArea();
+                        GlobalMethod.MoveMouseTo(abnormalscreenRa.Width/4,abnormalscreenRa.Height/2);//移到左侧
+                        for (var i = 0; i < 150; i++)
+                        {
+                            Simulation.SendInput.Mouse.VerticalScroll(-1);
+                            await Delay(10, _ct);
+                        }
+                        await Delay(400, _ct);
+                        
+                        using var abnormalRa = CaptureToRectArea();
+                        var ocrList = abnormalRa.FindMulti(RecognitionObject.Ocr(0, 0, abnormalRa.Width*0.5, abnormalRa.Height));
+                        var done = ocrList.LastOrDefault(t =>
+                            Regex.IsMatch(t.Text, this.leyLineDisorderLocalizedString));
+                        if (done != null)
+                        {
+                            await Delay(300, _ct);
 
+                            switch (sundaySelectedValue)
+                            {
+                                case 1:
+                                    GlobalMethod.Click(done.X, done.Y-abnormalRa.Height/5);
+                                    break;
+                                case 2:
+                                    GlobalMethod.Click(done.X, done.Y-abnormalRa.Height/10);
+                                    break;
+                                case 3:
+                                    GlobalMethod.Click(done.X, done.Y);
+                                    break;
+                                default:
+                                    Logger.LogWarning("无效的 sundaySelectedValue 值: {sundaySelectedValue}",
+                                        sundaySelectedValue);
+                                    break;
+                            }
+                        }
+                        //await Delay(100000, _ct);//调试延时=========
+                    }
+                    else
+                    {
+                        Logger.LogInformation("周日未设置秘境奖励序号，不进行奖励选择");
+                    }
+                }
+                else
+                {
+                    Logger.LogWarning("周日设置秘境奖励序号错误，请检查配置页面");
+                }
+            } else
+            {
+                Logger.LogWarning("周日奖励选择：圣遗物副本无需选择奖励");
+            }
+            await Delay(300, _ct);
+            //await Delay(100000, _ct);//调试延时=========
+        }
+        
         // 点击单人挑战
         int retryTimes = 0;
         while (retryTimes < 20)
@@ -408,11 +471,22 @@ public class AutoDomainTask : ISoloTask
             {
                 await Delay(1000, _ct);
                 done.Click();
+                await Delay(500, _ct);
+                
+                using var reRa = CaptureToRectArea();//再次确认
+                var reocrList = reRa.FindMulti(RecognitionObject.Ocr(0, reRa.Height * 0.2, reRa.Width, reRa.Height * 0.6));
+                var redone = reocrList.FirstOrDefault(t =>
+                    Regex.IsMatch(t.Text, this.leyLineDisorderLocalizedString) ||
+                    Regex.IsMatch(t.Text, this.clickanywheretocloseLocalizedString));
+                if (redone != null)
+                {
+                    continue;
+                }
                 break;
             }
 
             // todo 添加小地图角标位置检测 防止有人手点了
-            await Delay(1000, _ct);
+            await Delay(500, _ct);
         }
 
         await Delay(2000, _ct);
@@ -574,7 +648,7 @@ public class AutoDomainTask : ISoloTask
         using var ra = CaptureToRectArea();
 
         var endTipsRect = ra.DeriveCrop(AutoFightAssets.Instance.EndTipsUpperRect);
-        var text = OcrFactory.Paddle.Ocr(endTipsRect.SrcGreyMat);
+        var text = OcrFactory.Paddle.Ocr(endTipsRect.SrcMat);
         if (Regex.IsMatch(text, this.challengeCompletedLocalizedString))
         {
             Logger.LogInformation("检测到秘境结束提示(挑战达成)，结束秘境");
@@ -582,7 +656,7 @@ public class AutoDomainTask : ISoloTask
         }
 
         endTipsRect = ra.DeriveCrop(AutoFightAssets.Instance.EndTipsRect);
-        text = OcrFactory.Paddle.Ocr(endTipsRect.SrcGreyMat);
+        text = OcrFactory.Paddle.Ocr(endTipsRect.SrcMat);
         if (Regex.IsMatch(text, this.autoLeavingLocalizedString))
         {
             Logger.LogInformation("检测到秘境结束提示(xxx秒后自动退出)，结束秘境");
@@ -828,9 +902,9 @@ public class AutoDomainTask : ISoloTask
         using var memoryStream = new MemoryStream();
         region.SrcBitmap.Save(memoryStream, ImageFormat.Bmp);
         memoryStream.Seek(0, SeekOrigin.Begin);
-        var result = _predictor.Detect(memoryStream);
+        var result = _predictor.Predictor.Detect(memoryStream);
         var list = new List<RectDrawable>();
-        foreach (var box in result.Boxes)
+        foreach (var box in result)
         {
             var rect = new Rect(box.Bounds.X, box.Bounds.Y, box.Bounds.Width, box.Bounds.Height);
             list.Add(region.ToRectDrawable(rect, "tree"));
@@ -840,7 +914,7 @@ public class AutoDomainTask : ISoloTask
 
         if (list.Count > 0)
         {
-            var box = result.Boxes[0];
+            var box = result[0];
             return new Rect(box.Bounds.X, box.Bounds.Y, box.Bounds.Width, box.Bounds.Height);
         }
 
@@ -1043,7 +1117,7 @@ public class AutoDomainTask : ISoloTask
             // 图像右侧就是脆弱树脂数量
             var countArea = ra.DeriveCrop(fragileResinCountRa.X + fragileResinCountRa.Width, fragileResinCountRa.Y,
                 (int)(fragileResinCountRa.Width * 3), fragileResinCountRa.Height);
-            var count = OcrFactory.Paddle.Ocr(countArea.SrcGreyMat);
+            var count = OcrFactory.Paddle.Ocr(countArea.SrcMat);
             fragileResinCount = StringUtils.TryParseInt(count);
         }
 
