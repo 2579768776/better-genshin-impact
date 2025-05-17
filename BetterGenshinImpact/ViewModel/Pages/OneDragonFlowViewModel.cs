@@ -25,11 +25,13 @@ using Newtonsoft.Json;
 using Wpf.Ui.Controls;
 using Wpf.Ui.Violeta.Controls;
 using System.Windows.Controls;
+using ABI.Windows.UI.UIAutomation;
 using Wpf.Ui;
 using StackPanel = Wpf.Ui.Controls.StackPanel;
 using BetterGenshinImpact.Core.Config;
 using BetterGenshinImpact.Core.Script.Project;
 using BetterGenshinImpact.Service.Interface;
+using TextBlock = Wpf.Ui.Controls.TextBlock;
 
 namespace BetterGenshinImpact.ViewModel.Pages;
 
@@ -86,7 +88,7 @@ public partial class OneDragonFlowViewModel : ViewModel
 
     private readonly string _scriptGroupPath = Global.Absolute(@"User\ScriptGroup");
     private readonly string _basePath = AppDomain.CurrentDomain.BaseDirectory;
-
+    
     private void ReadScriptGroup()
     {
         try
@@ -142,55 +144,69 @@ public partial class OneDragonFlowViewModel : ViewModel
     private async void AddNewTaskGroup()
     {
         ReadScriptGroup();
-        var selectedGroupName = await OnStartMultiScriptGroupAsync();
-        if (selectedGroupName == null)
+        var selectedGroupNamePick = await OnStartMultiScriptGroupAsync();
+        if (selectedGroupNamePick == null)
         {
             return;
         }
-
-        var taskItem = new OneDragonTaskItem(selectedGroupName)
+        int pickTaskCount = selectedGroupNamePick.Split(',').Count();
+        foreach (var selectedGroupName in selectedGroupNamePick.Split(','))
         {
-            IsEnabled = true
-        };
-        if (TaskList.All(task => task.Name != taskItem.Name))
-        {
-            var names = selectedGroupName.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(name => name.Trim())
-                .ToList();
-            bool containsAnyDefaultGroup =
-                names.Any(name => ScriptGroupsdefault.Any(defaultSg => defaultSg.Name == name));
-            if (containsAnyDefaultGroup)
+            var taskItem = new OneDragonTaskItem(selectedGroupName)
             {
-                int lastDefaultGroupIndex = -1;
-                for (int i = TaskList.Count - 1; i >= 0; i--)
+                IsEnabled = true
+            };
+            if (TaskList.All(task => task.Name != taskItem.Name))
+            {
+                var names = selectedGroupName.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(name => name.Trim())
+                    .ToList();
+                bool containsAnyDefaultGroup =
+                    names.Any(name => ScriptGroupsdefault.Any(defaultSg => defaultSg.Name == name));
+                if (containsAnyDefaultGroup)
                 {
-                    if (ScriptGroupsdefault.Any(defaultSg => defaultSg.Name == TaskList[i].Name))
+                    int lastDefaultGroupIndex = -1;
+                    for (int i = TaskList.Count - 1; i >= 0; i--)
                     {
-                        lastDefaultGroupIndex = i;
-                        break;
+                        if (ScriptGroupsdefault.Any(defaultSg => defaultSg.Name == TaskList[i].Name))
+                        {
+                            lastDefaultGroupIndex = i;
+                            break;
+                        }
                     }
-                }
-
-                if (lastDefaultGroupIndex >= 0)
-                {
-                    TaskList.Insert(lastDefaultGroupIndex + 1, taskItem);
+                    if (lastDefaultGroupIndex >= 0)
+                    {
+                        TaskList.Insert(lastDefaultGroupIndex + 1, taskItem);
+                    }
+                    else
+                    {
+                        TaskList.Insert(0, taskItem);
+                    }
+                    if (pickTaskCount == 1)
+                    {
+                        Toast.Success("一条龙任务添加成功");
+                    }
                 }
                 else
                 {
-                    TaskList.Insert(0, taskItem);
+                    TaskList.Add(taskItem);
+                    if (pickTaskCount == 1)
+                    {
+                        Toast.Success("配置组添加成功");
+                    }
                 }
-
-                Toast.Success("一条龙任务添加成功");
             }
             else
             {
-                TaskList.Add(taskItem);
-                Toast.Success("配置组添加成功");
-            }
+                if (pickTaskCount == 1)
+                {
+                    Toast.Warning("任务或配置组已存在");
+                }
+            } 
         }
-        else
+        if (pickTaskCount > 1)
         {
-            Toast.Warning("任务或配置组已存在");
+                Toast.Success(pickTaskCount + " 个任务添加成功");  
         }
     }
 
@@ -201,52 +217,38 @@ public partial class OneDragonFlowViewModel : ViewModel
         CheckBox selectedCheckBox = null; // 用于保存当前选中的 CheckBox
         foreach (var scriptGroup in ScriptGroups)
         {
+            if (TaskList.Any(taskName => scriptGroup.Name.Contains(taskName.Name)))
+            {
+                continue; // 不显示已经存在的配置组
+            }
             var checkBox = new CheckBox
             {
                 Content = scriptGroup.Name,
                 Tag = scriptGroup,
                 IsChecked = false // 初始状态下都未选中
             };
-            checkBox.Checked += (sender, args) =>
-            {
-                var currentCheckBox = sender as CheckBox;
-
-                if (selectedCheckBox != null && selectedCheckBox != currentCheckBox)
-                {
-                    selectedCheckBox.IsChecked = false; // 取消之前选中的 CheckBox
-                }
-
-                selectedCheckBox = currentCheckBox; // 更新当前选中的 CheckBox
-            };
-            checkBox.Unchecked += (sender, args) =>
-            {
-                if (selectedCheckBox == sender)
-                {
-                    selectedCheckBox = null; // 如果取消选中的是当前选中的 CheckBox，则设置为 null
-                }
-            };
-
             checkBoxes[scriptGroup] = checkBox;
             stackPanel.Children.Add(checkBox);
         }
-
         var uiMessageBox = new Wpf.Ui.Controls.MessageBox
         {
-            Title = "选择增加的配置组（单选）",
-            Content = new ScrollViewer
-            {
-                Content = stackPanel,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Height = 400
-            },
-            CloseButtonText = "关闭",
-            PrimaryButtonText = "确认",
-            Owner = Application.Current.MainWindow,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+        Title = "选择增加的配置组（可多选）",
+        Content = new ScrollViewer
+        {
+            Content = stackPanel,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        },
+        CloseButtonText = "关闭",
+        PrimaryButtonText = "确认",
+        Owner = Application.Current.ShutdownMode == ShutdownMode.OnMainWindowClose ? null : Application.Current.MainWindow,
+        WindowStartupLocation = WindowStartupLocation.CenterOwner,
+        SizeToContent = SizeToContent.Width , // 确保弹窗根据内容自动调整大小
+        MaxHeight = 600,
         };
         var result = await uiMessageBox.ShowDialogAsync();
         if (result == Wpf.Ui.Controls.MessageBoxResult.Primary)
         {
+            List<string> selectedItems = new List<string>(); // 用于存储所有选中的项
             foreach (var checkBox in checkBoxes.Values)
             {
                 if (checkBox.IsChecked == true)
@@ -254,8 +256,8 @@ public partial class OneDragonFlowViewModel : ViewModel
                     // 确保 Tag 是 ScriptGroup 类型，并返回其 Name 属性
                     var scriptGroup = checkBox.Tag as ScriptGroup;
                     if (scriptGroup != null)
-                    {
-                        return scriptGroup.Name;
+                    { 
+                        selectedItems.Add(scriptGroup.Name);
                     }
                     else
                     {
@@ -263,13 +265,111 @@ public partial class OneDragonFlowViewModel : ViewModel
                     }
                 }
             }
+            return string.Join(",", selectedItems); // 返回所有选中的项
         }
-
         return null;
     }
 
-    [ObservableProperty] private ObservableCollection<OneDragonFlowConfig> _configList = [];
+    public async Task<string?> OnPotBuyItemAsync()
+    {
+        var stackPanel = new StackPanel
+        {
+            Orientation = Orientation.Vertical,
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        var checkBoxes = new Dictionary<string, CheckBox>(); 
+        CheckBox selectedCheckBox = null;
+        
+        if (SelectedConfig.SecretTreasureObjects == null || SelectedConfig.SecretTreasureObjects.Count == 0)
+        {
+            Toast.Warning("未配置洞天百宝购买配置，请先设置");
+            SelectedConfig.SecretTreasureObjects.Add("每天重复");
+        }
+        var infoTextBlock = new TextBlock
+        {
+            Text = "日期不影响领取好感和钱币",
+            HorizontalAlignment = HorizontalAlignment.Center,
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 0, 10)
+        };
 
+        stackPanel.Children.Add(infoTextBlock);
+        // 添加下拉选择框
+        var dayComboBox = new ComboBox
+        {
+            ItemsSource = new List<string> { "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日", "每天重复" },
+            SelectedItem = SelectedConfig.SecretTreasureObjects.First(),
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 0, 10)
+        };
+        stackPanel.Children.Add(dayComboBox);
+        
+        foreach (var potBuyItem in SecretTreasureObjectList)
+        {
+            var checkBox = new CheckBox
+            {
+                Content = potBuyItem,
+                Tag = potBuyItem,
+                MinWidth = 180,
+                IsChecked = SelectedConfig.SecretTreasureObjects.Contains(potBuyItem) 
+            };
+            checkBoxes[potBuyItem] = checkBox; 
+            stackPanel.Children.Add(checkBox);
+        }
+        
+        var uiMessageBox = new Wpf.Ui.Controls.MessageBox
+        {
+            Title = "洞天百宝购买选择",
+            Content = new ScrollViewer
+            {
+                Content = stackPanel,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            },
+            CloseButtonText = "关闭",
+            PrimaryButtonText = "确认",
+            Owner = Application.Current.ShutdownMode == ShutdownMode.OnMainWindowClose ? null : Application.Current.MainWindow,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            SizeToContent = SizeToContent.Width, // 确保弹窗根据内容自动调整大小
+            MinWidth = 200,
+            MaxHeight = 500,
+        };
+
+        var result = await uiMessageBox.ShowDialogAsync();
+        if (result == Wpf.Ui.Controls.MessageBoxResult.Primary)
+        {
+            SelectedConfig.SecretTreasureObjects.Clear();
+            SelectedConfig.SecretTreasureObjects.Add(dayComboBox.SelectedItem.ToString());
+            List<string> selectedItems = new List<string>(); // 用于存储所有选中的项
+            foreach (var checkBox in checkBoxes.Values)
+            {
+                if (checkBox.IsChecked == true)
+                {
+                    var potBuyItem = checkBox.Tag as string;
+                    if (potBuyItem != null)
+                    {
+                        selectedItems.Add(potBuyItem);
+                        SelectedConfig.SecretTreasureObjects.Add(potBuyItem);
+                    }
+                    else
+                    {
+                        Toast.Error("加载失败");
+                    }
+                }
+            }
+            if (selectedItems.Count > 0)
+            {
+                return string.Join(",", selectedItems); // 返回所有选中的项
+            }
+            else
+            {
+                Toast.Warning("选择为空，请选择购买的宝物");
+            }
+        }
+        return null;
+    }
+    
+    [ObservableProperty] private ObservableCollection<OneDragonFlowConfig> _configList = [];
     /// <summary>
     /// 当前生效配置
     /// </summary>
@@ -283,6 +383,12 @@ public partial class OneDragonFlowViewModel : ViewModel
 
     [ObservableProperty] private List<string> _completionActionList = ["无", "关闭游戏", "关闭游戏和软件", "关机"];
 
+    [ObservableProperty] private List<string> _sundayEverySelectedValueList = ["1", "2", "3"];
+    
+    [ObservableProperty] private List<string> _sundaySelectedValueList = ["1", "2", "3"];
+
+    [ObservableProperty] private List<string> _secretTreasureObjectList = ["布匹","须臾树脂","大英雄的经验","流浪者的经验","精锻用魔矿","摩拉","祝圣精华","祝圣油膏"];
+    
     public AllConfig Config { get; set; } = TaskContext.Instance().Config;
 
     public OneDragonFlowViewModel()
@@ -306,6 +412,25 @@ public partial class OneDragonFlowViewModel : ViewModel
             }
         };
 
+        TaskList.CollectionChanged += (sender, e) =>
+        {
+            if (e.NewItems != null)
+            {
+                foreach (OneDragonTaskItem newItem in e.NewItems)
+                {
+                    newItem.PropertyChanged += TaskPropertyChanged;
+                }
+            }
+
+            if (e.OldItems != null)
+            {
+                foreach (OneDragonTaskItem oldItem in e.OldItems)
+                {
+                    oldItem.PropertyChanged -= TaskPropertyChanged;
+                }
+            }
+        };
+        
         TaskList.CollectionChanged += (sender, e) =>
         {
             if (e.NewItems != null)
@@ -453,6 +578,14 @@ public partial class OneDragonFlowViewModel : ViewModel
     }
 
     [RelayCommand]
+    private async void AddPotBuyItem()
+    {
+        await OnPotBuyItemAsync();
+        SaveConfig();
+        SelectedTask = null;
+    }
+    
+    [RelayCommand]
     private void AddTaskGroup()
     {
         AddNewTaskGroup();
@@ -516,10 +649,50 @@ public partial class OneDragonFlowViewModel : ViewModel
             Toast.Error("保存配置时失败");
         }
     }
+    
+    private bool _autoRun = true;
+    
+    [RelayCommand]
+    private void OnLoaded()
+    {
+        // 组件首次加载时运行一次。
+        if (!_autoRun)
+        {
+            return;
+        }
+        _autoRun = false;
+        //
+        var args = Environment.GetCommandLineArgs();
+        if (args.Length > 1 && args[1].Contains("startOneDragon"))
+        {
+            // 通过命令行参数启动一条龙。
+            if (args.Length > 2)
+            {
+                // 从命令行参数中提取一条龙配置名称。
+                _logger.LogInformation($"参数指定的一条龙配置：{args[2]}");
+                var argsOneDragonConfig = ConfigList.FirstOrDefault(x => x.Name == args[2], null);
+                if (argsOneDragonConfig != null)
+                {
+                    // 设定配置，配置下拉框会选定。
+                    SelectedConfig = argsOneDragonConfig;
+                    // 调用选定更新函数。
+                    OnConfigDropDownChanged();
+                }
+                else
+                {
+                    _logger.LogWarning("未找到，请检查。");
+                }
+            }
+            // 异步执行一条龙
+            Toast.Information($"命令行一条龙「{SelectedConfig.Name}」。");
+            OnOneKeyExecute();
+        }
+    }
 
     [RelayCommand]
     public async Task OnOneKeyExecute()
     {
+        _logger.LogInformation($"启用一条龙配置：{SelectedConfig.Name}");
         var taskListCopy = new List<OneDragonTaskItem>(TaskList);//避免执行过程中修改TaskList
         foreach (var task in taskListCopy)
         {

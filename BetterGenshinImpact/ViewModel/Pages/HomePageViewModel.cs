@@ -30,13 +30,14 @@ using Windows.System;
 using BetterGenshinImpact.GameTask.AutoFishing;
 using BetterGenshinImpact.Helpers.Extensions;
 using BetterGenshinImpact.Model;
+using BetterGenshinImpact.View.Pages.View;
+using BetterGenshinImpact.ViewModel.Pages.View;
 using Wpf.Ui.Controls;
 
 namespace BetterGenshinImpact.ViewModel.Pages;
 
 public partial class HomePageViewModel : ViewModel
 {
-
     [ObservableProperty]
     private IEnumerable<EnumItem<CaptureModes>> _modeNames = EnumExtensions.ToEnumItems<CaptureModes>();
 
@@ -66,7 +67,7 @@ public partial class HomePageViewModel : ViewModel
     private IntPtr _hWnd;
 
     [ObservableProperty]
-    private string[] _inferenceDeviceTypes = BgiSessionOption.InferenceDeviceTypes;
+    private InferenceDeviceType[] _inferenceDeviceTypes = Enum.GetValues<InferenceDeviceType>();
 
     public HomePageViewModel(IConfigService configService, TaskTriggerDispatcher taskTriggerDispatcher)
     {
@@ -84,7 +85,9 @@ public partial class HomePageViewModel : ViewModel
 
             // DirectML 是在 Windows 10 版本 1903 和 Windows SDK 的相应版本中引入的。
             // https://learn.microsoft.com/zh-cn/windows/ai/directml/dml
-            _inferenceDeviceTypes = _inferenceDeviceTypes.Where(x => x != "GPU_DirectML").ToArray();
+            _inferenceDeviceTypes = _inferenceDeviceTypes
+                .Where(x => x != InferenceDeviceType.GpuDirectMl)
+                .ToArray();
         }
 
         WeakReferenceMessenger.Default.Register<PropertyChangedMessage<object>>(this, (sender, msg) =>
@@ -107,34 +110,24 @@ public partial class HomePageViewModel : ViewModel
         });
     }
 
+    private bool _autoRun = true;
+
     [RelayCommand]
     private void OnLoaded()
     {
         // OnTest();
+        
+        // 组件首次加载时运行一次。
+        if (!_autoRun)
+        {
+            return;
+        }
+        _autoRun = false;
 
         var args = Environment.GetCommandLineArgs();
-
-        // url protocol
-        // BetterGI.dll bettergi://start/
-        if (args.Length > 1)
+        if (args.Length > 1 && args[1].Contains("start"))
         {
-            if (args[1].Contains("startOneDragon"))
-            {
-                var odVm = App.GetService<OneDragonFlowViewModel>();
-                odVm?.OneKeyExecuteCommand.Execute(null);
-            }
-            else if (args[1].Trim().Equals("--startGroups", StringComparison.InvariantCultureIgnoreCase) ||
-                     args.Length > 3)
-            {
-                var names = args.Skip(2).ToArray().Select(x => x.Trim()).ToArray();
-                // 启动调度器
-                var scheduler = App.GetService<ScriptControlViewModel>();
-                scheduler?.OnStartMultiScriptGroupWithNamesAsync(names);
-            }
-            else if (args[1].Contains("start"))
-            {
-                _ = OnStartTriggerAsync();
-            }
+            _ = OnStartTriggerAsync();
         }
     }
 
@@ -157,15 +150,15 @@ public partial class HomePageViewModel : ViewModel
         }
     }
 
-    [RelayCommand]
-    private void OnInferenceDeviceTypeDropDownChanged(string value)
-    {
-    }
+    // [RelayCommand]
+    // private void OnInferenceDeviceTypeDropDownChanged(string value)
+    // {
+    // }
 
     [RelayCommand]
     private void OnStartCaptureTest()
     {
-        var picker = new PickerWindow();
+        var picker = new PickerWindow(true);
 
         if (picker.PickCaptureTarget(new WindowInteropHelper(UIDispatcherHelper.MainWindow).Handle, out var hWnd))
         {
@@ -436,5 +429,18 @@ public partial class HomePageViewModel : ViewModel
 
         win.NavigateToHtml(html);
         win.ShowDialog();
+    }
+
+    [RelayCommand]
+    public void OnOpenHardwareAccelerationSettings()
+    {
+        var dialogWindow = new Window
+        {
+            Title = "硬件加速设置",
+            Content = new HardwareAccelerationView(new HardwareAccelerationViewModel()),
+            SizeToContent = SizeToContent.WidthAndHeight,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+        };
+        var result = dialogWindow.ShowDialog();
     }
 }
